@@ -133,14 +133,56 @@ All figures used in the paper are in `figures/`.
 
 ## Reproducing the Paper
 
-1. **Clone this repo**
-2. **Open Google Colab** (T4 GPU recommended)
-3. **Upload** `unified_experiment.py` to Colab
-4. **Add your prompts** (PROMPTS_A, PAIRS_B) to the script
-5. **Set** `RUN_MODEL` to the desired model and run
-6. Results save automatically to JSON; figures generate at the end
+> ⚠️ **Run one model at a time.** T4 GPU RAM (15 GB) is insufficient to run
+> all 6 models in a single session. Results accumulate across sessions via JSON.
 
-Expected runtime per model: 15–45 minutes on T4 GPU.
+### Step-by-step
+
+**1. Open Google Colab with T4 GPU**
+`Runtime → Change runtime type → T4 GPU`
+
+**2. Upload to Colab**
+```
+run_experiments.py
+multi_model_results_v2.json   ← only needed when continuing a previous session
+```
+
+**3. Set the target model** (line 37 of `run_experiments.py`)
+```python
+RUN_MODEL = "gpt2"   # edit this before each run
+```
+
+| Model | Approx. RAM | Approx. time |
+|-------|------------|-------------|
+| `gpt2` | ~6 GB | ~15 min |
+| `EleutherAI/gpt-neo-125M` | ~6 GB | ~15 min |
+| `EleutherAI/pythia-160m` | ~6 GB | ~15 min |
+| `gpt2-medium` | ~9 GB | ~25 min |
+| `EleutherAI/pythia-410m` | ~9 GB | ~25 min |
+| `gpt2-large` | ~13 GB | ~40 min |
+
+**4. Run all cells**
+
+Results save to `multi_model_results_v2.json`; all figures are generated and downloaded automatically.
+
+**5. Reset runtime between models**
+`Runtime → Factory reset runtime`
+
+This fully clears GPU RAM before loading the next model.
+
+**6. Repeat for each model**
+
+Re-upload `run_experiments.py` + the saved JSON, change `RUN_MODEL`, and run again.
+Results accumulate in the JSON file across sessions.
+
+### Tip: Use Google Drive to avoid re-uploading JSON
+
+```python
+from google.colab import drive
+drive.mount('/content/drive')
+# Then set in run_experiments.py:
+OUTPUT_JSON = "/content/drive/MyDrive/pc_results/multi_model_results_v2.json"
+```
 
 ---
 
