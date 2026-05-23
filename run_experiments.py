@@ -1,22 +1,16 @@
 # ================================================================
-# PC-Transformer Interpretability
-# Unified Experiment Script (Experiments 1–5)
+# PC-Transformer Interpretability — Unified Experiment Script
+# Memory-optimized: one model per run, aggressive cache clearing
 # ================================================================
 # Usage:
-#   1. Set RUN_MODELS in Section 1
+#   1. Set RUN_MODEL below
 #   2. Run all cells
-#   3. Results saved to JSON; figures generated automatically
-#
-# Requirements: transformer_lens, torch, numpy, scipy, matplotlib, pandas
-# Tested on: Google Colab T4 GPU
+#   3. Repeat with next model (Runtime -> Factory Reset between models)
 # ================================================================
 
-# ── Section 0: Install & Import ──────────────────────────────────
 import subprocess, sys
-
 def install(pkg):
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", pkg])
-
 install("transformer_lens")
 
 import os, json, gc, warnings
@@ -34,24 +28,19 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Device: {device}")
 if device == "cuda":
     print(f"GPU: {torch.cuda.get_device_name(0)}")
-    print(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+    print(f"VRAM: {torch.cuda.get_device_properties(0).total_memory/1e9:.1f} GB")
 
-# ── Section 1: Model Selection ───────────────────────────────────
-RUN_MODELS = [
-    "gpt2",                       # 117M, 12 layers
-    "gpt2-medium",                # 345M, 24 layers
-    "gpt2-large",                 # 774M, 36 layers
-    "EleutherAI/gpt-neo-125M",   # 125M, 12 layers
-    "EleutherAI/pythia-160m",    # 160M, 12 layers
-    "EleutherAI/pythia-410m",    # 410M, 24 layers
-]
+# ── ★ 여기만 바꾸고 실행 ★ ────────────────────────────────────
+RUN_MODEL = "gpt2"
+# "gpt2" / "gpt2-medium" / "gpt2-large"
+# "EleutherAI/gpt-neo-125M"
+# "EleutherAI/pythia-160m" / "EleutherAI/pythia-410m"
+# ─────────────────────────────────────────────────────────────
 
 OUTPUT_JSON = "multi_model_results_v2.json"
 LANGS = ["en", "es", "fr", "ko", "ru", "ja", "ar"]
 
-# ── Section 2: Prompts & Pairs ───────────────────────────────────
-
-# Experiment 1 & 3: 140 multilingual prompts
+# ── Prompts ───────────────────────────────────────────────────
 PROMPTS_A = [
     # English (30)
     ("en", "The sun rises in the east and sets in the west every day."),
@@ -201,118 +190,64 @@ PROMPTS_A = [
     ("ar", "بدأت الثورة الفرنسية عام ألف وسبعمائة وتسعة وثمانين."),
     ("ar", "عندما تنخفض درجة الحرارة إلى ما دون الصفر يتحول الماء إلى جليد."),
 ]
+PROMPTS_EN = [p for _, p in PROMPTS_A if _ == "en"]
 
-# English prompts only (for Experiments 3 & 5)
-PROMPTS_EN = [p for lang, p in PROMPTS_A if lang == "en"]
-
-# Experiment 2: Semantic pairs for activation patching
 PAIRS_B = [
     {"clean": "The capital of France is Paris",
      "corrupt": "The capital of Germany is Berlin",
-     "clean_token": " Paris", "corrupt_token": " Berlin",
-     "name": "cap_france_germany"},
+     "clean_token": " Paris", "corrupt_token": " Berlin", "name": "cap_france"},
     {"clean": "The capital of Japan is Tokyo",
      "corrupt": "The capital of China is Beijing",
-     "clean_token": " Tokyo", "corrupt_token": " Beijing",
-     "name": "cap_japan_china"},
+     "clean_token": " Tokyo", "corrupt_token": " Beijing", "name": "cap_japan"},
     {"clean": "The capital of Italy is Rome",
      "corrupt": "The capital of Spain is Madrid",
-     "clean_token": " Rome", "corrupt_token": " Madrid",
-     "name": "cap_italy_spain"},
+     "clean_token": " Rome", "corrupt_token": " Madrid", "name": "cap_italy"},
     {"clean": "The capital of Greece is Athens",
      "corrupt": "The capital of Turkey is Ankara",
-     "clean_token": " Athens", "corrupt_token": " Ankara",
-     "name": "cap_greece_turkey"},
+     "clean_token": " Athens", "corrupt_token": " Ankara", "name": "cap_greece"},
     {"clean": "The language of France is French",
      "corrupt": "The language of Germany is German",
-     "clean_token": " French", "corrupt_token": " German",
-     "name": "lang_france_germany"},
+     "clean_token": " French", "corrupt_token": " German", "name": "lang_france"},
 ]
 
-# Experiment 4: Extended semantic pairs for zero-ablation
 PAIRS_EXTENDED = [
-    # Capitals (10)
-    ("The capital of France is", " Paris",
-     "The capital of Spain is",  " Madrid",   "capital"),
-    ("The capital of Japan is",  " Tokyo",
-     "The capital of China is",  " Beijing",  "capital"),
-    ("The capital of Italy is",  " Rome",
-     "The capital of Greece is", " Athens",   "capital"),
-    ("The capital of Germany is"," Berlin",
-     "The capital of France is", " Paris",    "capital"),
-    ("The capital of Russia is", " Moscow",
-     "The capital of Germany is"," Berlin",   "capital"),
-    ("The capital of Egypt is",  " Cairo",
-     "The capital of Russia is", " Moscow",   "capital"),
-    ("The capital of Greece is", " Athens",
-     "The capital of Italy is",  " Rome",     "capital"),
-    ("The capital of Spain is",  " Madrid",
-     "The capital of Japan is",  " Tokyo",    "capital"),
-    ("The capital of China is",  " Beijing",
-     "The capital of Egypt is",  " Cairo",    "capital"),
-    ("The capital of India is",  " Delhi",
-     "The capital of China is",  " Beijing",  "capital"),
-    # Currencies (8)
-    ("The currency of Japan is the",  " yen",
-     "The currency of China is the",  " yuan",   "currency"),
-    ("The currency of UK is the",     " pound",
-     "The currency of Japan is the",  " yen",    "currency"),
-    ("The currency of China is the",  " yuan",
-     "The currency of UK is the",     " pound",  "currency"),
-    ("The currency of India is the",  " rup",
-     "The currency of UK is the",     " pound",  "currency"),
-    ("The currency of Russia is the", " ruble",
-     "The currency of India is the",  " rup",    "currency"),
-    ("The currency of Mexico is the", " peso",
-     "The currency of Russia is the", " ruble",  "currency"),
-    ("The currency of USA is the",    " dollar",
-     "The currency of Mexico is the", " peso",   "currency"),
-    ("The currency of Korea is the",  " won",
-     "The currency of USA is the",    " dollar", "currency"),
-    # Language relations (8)
-    ("People in France speak",   " French",
-     "People in Germany speak",  " German",    "language"),
-    ("People in Germany speak",  " German",
-     "People in France speak",   " French",    "language"),
-    ("People in Japan speak",    " Japanese",
-     "People in China speak",    " Chinese",   "language"),
-    ("People in China speak",    " Chinese",
-     "People in Japan speak",    " Japanese",  "language"),
-    ("People in Italy speak",    " Italian",
-     "People in France speak",   " French",    "language"),
-    ("People in Russia speak",   " Russian",
-     "People in Italy speak",    " Italian",   "language"),
-    ("People in Spain speak",    " Spanish",
-     "People in Russia speak",   " Russian",   "language"),
-    ("People in Greece speak",   " Greek",
-     "People in Spain speak",    " Spanish",   "language"),
-    # Colors (6)
-    ("The color of grass is",    " green",
-     "The color of the sky is",  " blue",      "color"),
-    ("The color of the sky is",  " blue",
-     "The color of grass is",    " green",     "color"),
-    ("The color of snow is",     " white",
-     "The color of coal is",     " black",     "color"),
-    ("The color of coal is",     " black",
-     "The color of snow is",     " white",     "color"),
-    ("The color of blood is",    " red",
-     "The color of snow is",     " white",     "color"),
-    ("The color of the sun is",  " yellow",
-     "The color of blood is",    " red",       "color"),
-    # Miscellaneous (5)
-    ("The sound a dog makes is", " bark",
-     "The sound a cat makes is", " me",        "animal"),
-    ("The largest ocean is the", " Pac",
-     "The smallest ocean is the"," Arc",       "geography"),
-    ("Water freezes at",         " zero",
-     "Water boils at",           " one",       "science"),
-    ("The opposite of hot is",   " cold",
-     "The opposite of big is",   " small",     "antonym"),
-    ("The opposite of day is",   " night",
-     "The opposite of hot is",   " cold",      "antonym"),
+    ("The capital of France is"," Paris","The capital of Spain is"," Madrid","capital"),
+    ("The capital of Japan is"," Tokyo","The capital of China is"," Beijing","capital"),
+    ("The capital of Italy is"," Rome","The capital of Greece is"," Athens","capital"),
+    ("The capital of Germany is"," Berlin","The capital of France is"," Paris","capital"),
+    ("The capital of Russia is"," Moscow","The capital of Germany is"," Berlin","capital"),
+    ("The capital of Egypt is"," Cairo","The capital of Russia is"," Moscow","capital"),
+    ("The capital of Greece is"," Athens","The capital of Italy is"," Rome","capital"),
+    ("The capital of Spain is"," Madrid","The capital of Japan is"," Tokyo","capital"),
+    ("The capital of China is"," Beijing","The capital of Egypt is"," Cairo","capital"),
+    ("The capital of India is"," Delhi","The capital of China is"," Beijing","capital"),
+    ("The currency of Japan is the"," yen","The currency of China is the"," yuan","currency"),
+    ("The currency of UK is the"," pound","The currency of Japan is the"," yen","currency"),
+    ("The currency of China is the"," yuan","The currency of UK is the"," pound","currency"),
+    ("The currency of Russia is the"," ruble","The currency of India is the"," rup","currency"),
+    ("The currency of Mexico is the"," peso","The currency of Russia is the"," ruble","currency"),
+    ("The currency of USA is the"," dollar","The currency of Mexico is the"," peso","currency"),
+    ("The currency of Korea is the"," won","The currency of USA is the"," dollar","currency"),
+    ("People in France speak"," French","People in Germany speak"," German","language"),
+    ("People in Germany speak"," German","People in France speak"," French","language"),
+    ("People in Japan speak"," Japanese","People in China speak"," Chinese","language"),
+    ("People in China speak"," Chinese","People in Japan speak"," Japanese","language"),
+    ("People in Italy speak"," Italian","People in France speak"," French","language"),
+    ("People in Russia speak"," Russian","People in Italy speak"," Italian","language"),
+    ("People in Spain speak"," Spanish","People in Russia speak"," Russian","language"),
+    ("People in Greece speak"," Greek","People in Spain speak"," Spanish","language"),
+    ("The color of grass is"," green","The color of the sky is"," blue","color"),
+    ("The color of the sky is"," blue","The color of grass is"," green","color"),
+    ("The color of snow is"," white","The color of coal is"," black","color"),
+    ("The color of coal is"," black","The color of snow is"," white","color"),
+    ("The color of blood is"," red","The color of snow is"," white","color"),
+    ("The color of the sun is"," yellow","The color of blood is"," red","color"),
+    ("Water freezes at"," zero","Water boils at"," one","science"),
+    ("The opposite of hot is"," cold","The opposite of big is"," small","antonym"),
+    ("The opposite of day is"," night","The opposite of hot is"," cold","antonym"),
 ]
 
-# ── Section 3: Utility Functions ─────────────────────────────────
+# ── Utilities ─────────────────────────────────────────────────
 
 def is_single_token(model, word):
     try:
@@ -321,540 +256,471 @@ def is_single_token(model, word):
     except:
         return False
 
-def get_zone_layers(n_layers, zone):
-    ranges = {
-        "early_spike": (0.10, 0.20),
-        "convergence": (0.25, 0.75),
-        "late_spike":  (0.80, 0.95),
-    }
-    lo, hi = ranges[zone]
-    return [l for l in range(n_layers) if lo <= l / n_layers <= hi]
+def get_zone_layers(n, zone):
+    lo, hi = {"early_spike":(0.10,0.20),
+               "convergence":(0.25,0.75),
+               "late_spike": (0.80,0.95)}[zone]
+    return [l for l in range(n) if lo <= l/n <= hi]
 
-# ── Section 4: Experiment Functions ──────────────────────────────
+def clear():
+    torch.cuda.empty_cache()
+    gc.collect()
 
-def run_exp1(model, model_name, n_layers):
-    """Residual stream convergence across 7 languages."""
-    print(f"  [Exp 1] {model_name}")
+# ── Experiment 1: Residual Stream Convergence ─────────────────
+
+def run_exp1(model, n_layers):
+    print("  [Exp 1] Residual stream convergence...")
     results = []
+    # names_filter: only cache what we need
+    needed = (
+        [f"blocks.{l}.hook_resid_pre"  for l in range(n_layers)] +
+        [f"blocks.{l}.hook_resid_post" for l in range(n_layers)]
+    )
     for idx, (lang, prompt) in enumerate(PROMPTS_A):
         try:
             tokens = model.to_tokens(prompt)[:, 1:].to(device)
-            _, cache = model.run_with_cache(tokens)
+            with torch.no_grad():
+                _, cache = model.run_with_cache(
+                    tokens, names_filter=lambda n: n in needed)
 
-            # Cosine similarities between consecutive layers
             sims = []
             for l in range(1, n_layers):
                 prev = cache[f"blocks.{l-1}.hook_resid_post"][0].cpu()
                 curr = cache[f"blocks.{l}.hook_resid_post"][0].cpu()
                 sims.append(
-                    torch.nn.functional.cosine_similarity(prev, curr, dim=-1).numpy()
-                )
+                    torch.nn.functional.cosine_similarity(
+                        prev, curr, dim=-1).numpy())
             sims = np.array(sims)
 
-            # Delta magnitudes
             deltas = []
             for l in range(n_layers):
                 pre  = cache[f"blocks.{l}.hook_resid_pre"][0].cpu()
                 post = cache[f"blocks.{l}.hook_resid_post"][0].cpu()
-                deltas.append(torch.norm(post - pre, p=2, dim=-1).numpy())
+                deltas.append(torch.norm(post-pre, p=2, dim=-1).numpy())
             deltas = np.array(deltas)
 
-            early_d = deltas[:max(1, int(n_layers*0.4))].flatten()
-            late_d  = deltas[int(n_layers*0.6):].flatten()
-            _, delta_p = stats.ttest_ind(early_d, late_d)
+            del cache; clear()
 
-            mid_s   = sims[int(n_layers*0.25):int(n_layers*0.75)].flatten()
-            early_s = sims[:max(1, int(n_layers*0.25))].flatten()
-
-            results.append({
-                "lang":            lang,
-                "middle_sim_mean": float(mid_s.mean()),
-                "delta_p":         float(delta_p),
-            })
-
+            early_d = deltas[:max(1,int(n_layers*.4))].flatten()
+            late_d  = deltas[int(n_layers*.6):].flatten()
+            _, dp   = stats.ttest_ind(early_d, late_d)
+            mid_s   = sims[int(n_layers*.25):int(n_layers*.75)].flatten()
+            results.append({"lang":lang,
+                            "middle_sim_mean":float(mid_s.mean()),
+                            "delta_p":float(dp)})
         except Exception as e:
             pass
-
-        if (idx + 1) % 20 == 0:
-            print(f"    {idx+1}/{len(PROMPTS_A)} done")
+        if (idx+1) % 20 == 0:
+            print(f"    {idx+1}/{len(PROMPTS_A)}")
 
     df = pd.DataFrame(results)
-    summary = df.groupby("lang")[["middle_sim_mean", "delta_p"]].mean()
-    return summary.to_dict(), results
+    summary = df.groupby("lang")[["middle_sim_mean","delta_p"]].mean()
+    print(summary.to_string()); return summary.to_dict(), results
 
+# ── Experiment 2: Activation Patching ────────────────────────
 
-def run_exp2(model, model_name, n_layers):
-    """Activation patching across semantic pairs."""
-    print(f"  [Exp 2] {model_name}")
+def run_exp2(model, n_layers):
+    print("  [Exp 2] Activation patching...")
     b_results = {}
-
     for pair in PAIRS_B:
         if not (is_single_token(model, pair["clean_token"]) and
                 is_single_token(model, pair["corrupt_token"])):
             continue
         try:
-            clean_toks   = model.to_tokens(pair["clean"])[:, 1:].to(device)
-            corrupt_toks = model.to_tokens(pair["corrupt"])[:, 1:].to(device)
-            seq_len      = min(clean_toks.shape[1], corrupt_toks.shape[1])
-            clean_toks   = clean_toks[:, :seq_len]
-            corrupt_toks = corrupt_toks[:, :seq_len]
-
-            _, clean_cache = model.run_with_cache(clean_toks)
             ct  = model.to_single_token(pair["clean_token"])
             cot = model.to_single_token(pair["corrupt_token"])
-            n_pos   = corrupt_toks.shape[1]
+            ctoks = model.to_tokens(pair["clean"])[:,1:].to(device)
+            xtoks = model.to_tokens(pair["corrupt"])[:,1:].to(device)
+            sl    = min(ctoks.shape[1], xtoks.shape[1])
+            ctoks, xtoks = ctoks[:,:sl], xtoks[:,:sl]
+
+            hook_names = [f"blocks.{l}.hook_resid_post" for l in range(n_layers)]
+            with torch.no_grad():
+                _, clean_cache = model.run_with_cache(
+                    ctoks, names_filter=lambda n: n in hook_names)
+
+            n_pos   = xtoks.shape[1]
             effects = torch.zeros(n_layers, n_pos)
 
-            for layer in range(n_layers):
-                hook_name = f"blocks.{layer}.hook_resid_post"
+            for l in range(n_layers):
+                hn = f"blocks.{l}.hook_resid_post"
                 for pos in range(n_pos):
-                    cv = clean_cache[hook_name][0, pos, :].detach().clone()
+                    cv = clean_cache[hn][0, pos, :].detach().clone()
                     def make_hook(c, p):
-                        def fn(value, hook):
-                            value = value.clone()
-                            value[0, p, :] = c
-                            return value
+                        def fn(v, hook):
+                            v = v.clone(); v[0,p,:] = c; return v
                         return fn
-                    patched = model.run_with_hooks(
-                        corrupt_toks,
-                        fwd_hooks=[(hook_name, make_hook(cv, pos))]
-                    )
-                    effects[layer, pos] = (patched[0,-1,ct] - patched[0,-1,cot]).item()
+                    with torch.no_grad():
+                        out = model.run_with_hooks(
+                            xtoks, fwd_hooks=[(hn, make_hook(cv, pos))])
+                    effects[l, pos] = (out[0,-1,ct] - out[0,-1,cot]).item()
+                    del out; clear()
 
+            del clean_cache; clear()
             b_results[pair["name"]] = effects.numpy().tolist()
             print(f"    done: {pair['name']}")
-
         except Exception as e:
             print(f"    skip {pair['name']}: {e}")
-
     return b_results
 
+# ── Experiment 3: MLP Magnitude ──────────────────────────────
 
-def run_exp3(model, model_name, n_layers):
-    """MLP transform magnitude profiling."""
-    print(f"  [Exp 3] {model_name}")
+def run_exp3(model, n_layers):
+    print("  [Exp 3] MLP magnitude...")
+    needed = (
+        [f"blocks.{l}.ln2.hook_normalized" for l in range(n_layers)] +
+        [f"blocks.{l}.hook_mlp_out"         for l in range(n_layers)]
+    )
     all_norms = []
     for prompt in PROMPTS_EN:
         try:
-            tokens = model.to_tokens(prompt)[:, 1:].to(device)
-            _, cache = model.run_with_cache(tokens)
+            tokens = model.to_tokens(prompt)[:,1:].to(device)
+            with torch.no_grad():
+                _, cache = model.run_with_cache(
+                    tokens, names_filter=lambda n: n in needed)
             norms = []
             for l in range(n_layers):
                 try:
-                    mlp_in  = cache[f"blocks.{l}.ln2.hook_normalized"][0].cpu()
-                    mlp_out = cache[f"blocks.{l}.hook_mlp_out"][0].cpu()
-                    norms.append(torch.norm(mlp_out - mlp_in, dim=-1).mean().item())
+                    mi = cache[f"blocks.{l}.ln2.hook_normalized"][0].cpu()
+                    mo = cache[f"blocks.{l}.hook_mlp_out"][0].cpu()
+                    norms.append(torch.norm(mo-mi, dim=-1).mean().item())
                 except:
                     norms.append(0.0)
             all_norms.append(norms)
+            del cache; clear()
         except:
             pass
-    return np.mean(all_norms, axis=0).tolist() if all_norms else [0.0] * n_layers
+    return np.mean(all_norms, axis=0).tolist() if all_norms else [0.]*n_layers
 
+# ── Experiment 4: Zero-Ablation ──────────────────────────────
 
-def run_exp4(model, model_name, n_layers):
-    """Zero-ablation of MLP zones."""
-    print(f"  [Exp 4] {model_name}")
-    zones     = ["early_spike", "convergence", "late_spike"]
-    zone_data = {z: [] for z in zones}
+def run_exp4(model, n_layers):
+    print("  [Exp 4] Zero-ablation...")
+    zones     = ["early_spike","convergence","late_spike"]
+    zone_data = {z:[] for z in zones}
+    valid     = [p for p in PAIRS_EXTENDED
+                 if is_single_token(model,p[1]) and is_single_token(model,p[3])]
+    print(f"    valid pairs: {len(valid)}")
 
-    valid_pairs = [p for p in PAIRS_EXTENDED
-                   if is_single_token(model, p[1]) and is_single_token(model, p[3])]
-    print(f"    valid pairs: {len(valid_pairs)}")
-
-    def zero_hook(value, hook):
-        return torch.zeros_like(value)
+    def zero_hook(v, hook): return torch.zeros_like(v)
 
     skipped = 0
-    for item in valid_pairs:
-        cp, ct_str, xp, xt_str, cat = item
+    for cp, ct_s, xp, xt_s, cat in valid:
         try:
-            ct   = model.to_single_token(ct_str)
-            xt   = model.to_single_token(xt_str)
-            toks = model.to_tokens(cp)[:, 1:].to(device)
-
+            ct   = model.to_single_token(ct_s)
+            xt   = model.to_single_token(xt_s)
+            toks = model.to_tokens(cp)[:,1:].to(device)
             with torch.no_grad():
-                bl = model(toks)
-            baseline = (bl[0,-1,ct] - bl[0,-1,xt]).item()
-            if baseline < 1.0:
-                skipped += 1
-                continue
-
+                bl  = model(toks)
+            base = (bl[0,-1,ct] - bl[0,-1,xt]).item()
+            del bl; clear()
+            if base < 1.0:
+                skipped += 1; continue
             for zone in zones:
                 layers = get_zone_layers(n_layers, zone)
                 hooks  = [(f"blocks.{l}.hook_mlp_out", zero_hook) for l in layers]
                 with torch.no_grad():
                     ab = model.run_with_hooks(toks, fwd_hooks=hooks)
-                ablated = (ab[0,-1,ct] - ab[0,-1,xt]).item()
-                drop    = (baseline - ablated) / abs(baseline)
-                zone_data[zone].append({"drop": drop, "category": cat})
-
+                drop = (base - (ab[0,-1,ct]-ab[0,-1,xt]).item()) / abs(base)
+                zone_data[zone].append({"drop":drop,"category":cat})
+                del ab; clear()
         except:
             skipped += 1
-
-    print(f"    skipped (baseline<1.0 or error): {skipped}")
+    print(f"    skipped: {skipped}")
     result = {}
     for zone in zones:
         drops = [d["drop"] for d in zone_data[zone]]
         if drops:
-            result[zone] = {
-                "mean_drop": float(np.mean(drops)),
-                "std_drop":  float(np.std(drops)),
-                "n_pairs":   len(drops),
-                "raw":       drops,
-            }
-            print(f"    {zone}: {result[zone]['mean_drop']:+.3f} ± "
-                  f"{result[zone]['std_drop']:.3f} (n={len(drops)})")
+            result[zone] = {"mean_drop":float(np.mean(drops)),
+                            "std_drop": float(np.std(drops)),
+                            "n_pairs":  len(drops),
+                            "raw":      drops}
+            print(f"    {zone}: {result[zone]['mean_drop']:+.3f}"
+                  f" ± {result[zone]['std_drop']:.3f} (n={len(drops)})")
     return result
 
+# ── Experiment 5: Logit Lens ──────────────────────────────────
 
-def run_exp5(model, model_name, n_layers):
-    """Logit lens: track target token rank across layers."""
-    print(f"  [Exp 5] {model_name}")
+def run_exp5(model, n_layers):
+    print("  [Exp 5] Logit lens...")
     W_U = model.W_U.detach()
     b_U = model.b_U.detach()
     layer_ranks = [[] for _ in range(n_layers)]
+    needed = [f"blocks.{l}.hook_resid_post" for l in range(n_layers)]
 
     for prompt in PROMPTS_EN[:15]:
         try:
             tokens     = model.to_tokens(prompt).to(device)
-            if tokens.shape[1] < 4:
-                continue
-            target_tok = tokens[0, -1].item()
-            input_toks = tokens[:, :-1]
-
+            if tokens.shape[1] < 4: continue
+            target_tok = tokens[0,-1].item()
             with torch.no_grad():
                 _, cache = model.run_with_cache(
-                    input_toks,
-                    names_filter=lambda n: "hook_resid_post" in n
-                )
-
+                    tokens[:,:-1],
+                    names_filter=lambda n: n in needed)
             for l in range(n_layers):
                 key = f"blocks.{l}.hook_resid_post"
-                if key not in cache:
-                    continue
-                resid      = cache[key][0, -1, :].float()
-                resid_norm = (resid - resid.mean()) / (resid.std() + 1e-8)
-                logits_l   = resid_norm @ W_U.float() + b_U.float()
-                sorted_ids = logits_l.argsort(descending=True)
-                matches    = (sorted_ids == target_tok).nonzero(as_tuple=True)
-                if len(matches[0]) > 0:
-                    layer_ranks[l].append(matches[0][0].item())
-
-            del cache
-            torch.cuda.empty_cache()
+                if key not in cache: continue
+                r   = cache[key][0,-1,:].float()
+                r   = (r - r.mean()) / (r.std() + 1e-8)
+                lg  = r @ W_U.float() + b_U.float()
+                rank = (lg.argsort(descending=True) == target_tok
+                        ).nonzero(as_tuple=True)[0]
+                if len(rank) > 0:
+                    layer_ranks[l].append(rank[0].item())
+            del cache; clear()
         except:
             continue
+    avg = [float(np.mean(r)) if r else None for r in layer_ranks]
+    valid = [r for r in avg if r is not None]
+    if valid: print(f"    L0≈{valid[0]:.0f} → Lfinal≈{valid[-1]:.2f}")
+    return avg
 
-    avg_ranks = [float(np.mean(r)) if r else None for r in layer_ranks]
-    valid = [r for r in avg_ranks if r is not None]
-    if valid:
-        print(f"    L0≈{valid[0]:.0f} → Lfinal≈{valid[-1]:.2f}")
-    return avg_ranks
+# ── Main ──────────────────────────────────────────────────────
 
-# ── Section 5: Main Loop ──────────────────────────────────────────
+short = RUN_MODEL.split("/")[-1]
 
+# Load existing
 if os.path.exists(OUTPUT_JSON):
     with open(OUTPUT_JSON) as f:
         all_results = json.load(f)
-    print(f"Loaded existing results: {list(all_results.keys())}")
 else:
     all_results = {}
 
-for model_name in RUN_MODELS:
-    short = model_name.split("/")[-1]
-    if short in all_results:
-        print(f"\n[{short}] already done, skipping")
-        continue
+if short in all_results:
+    print(f"[{short}] already in JSON. Delete the key to re-run.")
+else:
+    print(f"\n{'='*55}\nModel: {RUN_MODEL}\n{'='*55}")
+    model = HookedTransformer.from_pretrained(RUN_MODEL, device=device)
+    model.eval()
+    n_layers = model.cfg.n_layers
+    print(f"Layers: {n_layers} | "
+          f"Params: {sum(p.numel() for p in model.parameters())/1e6:.0f}M")
 
-    print(f"\n{'='*55}\nModel: {model_name}\n{'='*55}")
+    sumA, resA = run_exp1(model, n_layers)
+    resB       = run_exp2(model, n_layers)
+    resC       = run_exp3(model, n_layers)
+    resD       = run_exp4(model, n_layers)
+    resE       = run_exp5(model, n_layers)
 
-    try:
-        model = HookedTransformer.from_pretrained(model_name, device=device)
-        model.eval()
-        n_layers = model.cfg.n_layers
-        print(f"Layers: {n_layers}")
+    all_results[short] = {
+        "model_full_name": RUN_MODEL,
+        "n_layers":        n_layers,
+        "A_summary":       sumA,
+        "A_results":       resA,
+        "B_results":       resB,
+        "C_mlp_norms":     resC,
+        "D_zero_ablation": resD,
+        "E_logit_lens":    resE,
+    }
 
-        summary_A, results_A = run_exp1(model, short, n_layers)
-        results_B            = run_exp2(model, short, n_layers)
-        results_C            = run_exp3(model, short, n_layers)
-        results_D            = run_exp4(model, short, n_layers)
-        results_E            = run_exp5(model, short, n_layers)
+    del model; clear()
 
-        all_results[short] = {
-            "model_full_name": model_name,
-            "n_layers":        n_layers,
-            "n_params":        sum(p.numel() for p in model.parameters()),
-            "A_summary":       summary_A,
-            "A_results":       results_A,
-            "B_results":       results_B,
-            "C_mlp_norms":     results_C,
-            "D_zero_ablation": results_D,
-            "E_logit_lens":    results_E,
-        }
+    with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
+        json.dump(all_results, f, indent=2, ensure_ascii=False)
+    print(f"\n✅ [{short}] saved to {OUTPUT_JSON}")
 
-        with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
-            json.dump(all_results, f, indent=2, ensure_ascii=False)
-        print(f"[{short}] saved.")
+print(f"\nCompleted models so far: {list(all_results.keys())}")
 
-    except Exception as e:
-        print(f"[{model_name}] FAILED: {e}")
-    finally:
-        try: del model
-        except: pass
-        torch.cuda.empty_cache()
-        gc.collect()
+# ── Figures (runs after each model, updates automatically) ────
 
-print(f"\nAll done: {list(all_results.keys())}")
+data   = all_results
+models = list(data.keys())
+if not models:
+    print("No data to plot yet.")
+else:
+    ML = {"gpt2":"GPT-2 (117M)","gpt2-medium":"GPT-2 Med (345M)",
+          "gpt2-large":"GPT-2 Large (774M)","gpt-neo-125M":"GPT-Neo (125M)",
+          "pythia-160m":"Pythia (160M)","pythia-410m":"Pythia (410M)"}
+    LC = {"en":"#1f77b4","es":"#ff7f0e","fr":"#2ca02c",
+          "ko":"#d62728","ru":"#9467bd","ja":"#8c564b","ar":"#e377c2"}
+    MC = {"gpt2":"#1f77b4","gpt2-medium":"#aec7e8","gpt2-large":"#0a4a7a",
+          "gpt-neo-125M":"#d62728","pythia-160m":"#9467bd","pythia-410m":"#8c564b"}
+    ZC = {"early_spike":"#e74c3c","convergence":"#3498db","late_spike":"#e67e22"}
 
-# ── Section 6: Generate All Figures ──────────────────────────────
-
-models = list(all_results.keys())
-MODEL_LABELS = {
-    "gpt2":         "GPT-2 (117M)",
-    "gpt2-medium":  "GPT-2 Med (345M)",
-    "gpt2-large":   "GPT-2 Large (774M)",
-    "gpt-neo-125M": "GPT-Neo (125M)",
-    "pythia-160m":  "Pythia (160M)",
-    "pythia-410m":  "Pythia (410M)",
-}
-LANG_COLORS = {
-    "en": "#1f77b4", "es": "#ff7f0e", "fr": "#2ca02c",
-    "ko": "#d62728", "ru": "#9467bd", "ja": "#8c564b", "ar": "#e377c2"
-}
-MODEL_COLORS = {
-    "gpt2":         "#1f77b4",
-    "gpt2-medium":  "#aec7e8",
-    "gpt2-large":   "#0a4a7a",
-    "gpt-neo-125M": "#d62728",
-    "pythia-160m":  "#9467bd",
-    "pythia-410m":  "#8c564b",
-}
-ZONE_COLORS = {
-    "early_spike": "#e74c3c",
-    "convergence": "#3498db",
-    "late_spike":  "#e67e22",
-}
-
-# Figure 1: Cosine Similarity
-print("\n[Figure 1] Cosine Similarity...")
-n = len(models)
-fig, axes = plt.subplots(1, n, figsize=(4.5*n, 5.5), sharey=False)
-if n == 1: axes = [axes]
-for ax, m in zip(axes, models):
-    summary = all_results[m]["A_summary"]["middle_sim_mean"]
-    vals    = [summary.get(lang, 0) for lang in LANGS]
-    bars    = ax.bar(range(7), vals,
-                     color=[LANG_COLORS[l] for l in LANGS],
-                     alpha=0.88, width=0.7, edgecolor="white")
-    bars[0].set_edgecolor("black"); bars[0].set_linewidth(2.2)
-    v_min, v_max = min(v for v in vals if v > 0), max(vals)
-    margin = (v_max - v_min) * 0.3
-    ax.set_ylim(max(0, v_min - margin), min(1.0, v_max + margin*0.5))
-    ax.set_xticks(range(7)); ax.set_xticklabels(LANGS, fontsize=10)
-    en_rank = sorted(vals, reverse=True).index(summary.get("en", 0)) + 1
-    ax.set_title(f"{MODEL_LABELS.get(m, m)}\n(en #{en_rank}/7)",
-                 fontsize=10, fontweight="bold")
-    ax.set_xlabel("Language", fontsize=10)
-    ax.set_ylabel("Mid-Layer Cosine Similarity", fontsize=9)
-    ax.grid(axis="y", alpha=0.3, ls="--")
-    ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
-    en_val = summary.get("en", 0)
-    ax.annotate(f"{en_val:.3f}", xy=(0, en_val), xytext=(0, 5),
-                textcoords="offset points", ha="center",
-                fontsize=8, fontweight="bold")
-handles = [plt.Rectangle((0,0),1,1, color=LANG_COLORS[l]) for l in LANGS]
-fig.legend(handles, LANGS, loc="upper right", bbox_to_anchor=(1.0, 1.02),
-           ncol=1, fontsize=10)
-fig.suptitle("Figure 1: Mid-Layer Cosine Similarity by Language\n"
-             "(Independent y-axes | en #rank = English rank among 7 languages)",
-             fontsize=13, fontweight="bold", y=1.03)
-plt.tight_layout()
-plt.savefig("figure1.png", dpi=150, bbox_inches="tight", facecolor="white")
-print("  figure1.png saved")
-
-# Figure 2: MLP Magnitude (by family)
-print("[Figure 2] MLP Magnitude...")
-families = {
-    "GPT-2 Family":   [m for m in models if "gpt2" in m],
-    "GPT-Neo Family": [m for m in models if "neo" in m],
-    "Pythia Family":  [m for m in models if "pythia" in m],
-}
-families = {k: v for k, v in families.items() if v}
-fig, axes = plt.subplots(1, len(families), figsize=(7*len(families), 5.5))
-if len(families) == 1: axes = [axes]
-for ax, (title, group) in zip(axes, families.items()):
-    for m in group:
-        norms = all_results[m]["C_mlp_norms"]
-        x = [i/len(norms) for i in range(len(norms))]
-        ax.plot(x, norms, marker="o", markersize=3, linewidth=2,
-                color=MODEL_COLORS.get(m, "#333"),
-                label=MODEL_LABELS.get(m, m), alpha=0.9)
-    ax.axvspan(0.10, 0.20, alpha=0.08, color="red")
-    ax.axvspan(0.80, 0.95, alpha=0.08, color="blue")
-    ax.set_xlabel("Normalized Layer Position", fontsize=11)
-    ax.set_ylabel("MLP Transform Magnitude", fontsize=11)
-    ax.set_title(title, fontsize=12, fontweight="bold")
-    ax.legend(fontsize=9); ax.grid(alpha=0.3, ls="--")
-    ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
-fig.suptitle("Figure 2: MLP Transform Magnitude (Normalized Layer Position)",
-             fontsize=13, fontweight="bold")
-plt.tight_layout()
-plt.savefig("figure2.png", dpi=150, bbox_inches="tight", facecolor="white")
-print("  figure2.png saved")
-
-# Figure 3: Activation Patching
-print("[Figure 3] Activation Patching...")
-def get_avg_patch(b_res):
-    mats = []
-    for _, mat in b_res.items():
-        m = np.array(mat)
-        mn, mx = m.min(), m.max()
-        mats.append((m - mn)/(mx - mn) if mx - mn > 1e-6 else np.zeros_like(m))
-    if not mats: return None
-    mp = max(m.shape[1] for m in mats)
-    nl = mats[0].shape[0]
-    p  = np.zeros((len(mats), nl, mp))
-    for i, m in enumerate(mats): p[i, :, mp-m.shape[1]:] = m
-    return np.mean(p, axis=0)
-
-mb = [m for m in models if all_results[m].get("B_results")]
-if mb:
-    fig, axes = plt.subplots(1, len(mb), figsize=(4.8*len(mb), 5.5))
-    if len(mb) == 1: axes = [axes]
-    last_im = None
-    for ax, m in zip(axes, mb):
-        mat = get_avg_patch(all_results[m]["B_results"])
-        if mat is None: continue
-        nl = mat.shape[0]
-        last_im = ax.imshow(mat, aspect="auto", cmap="RdBu_r",
-                            vmin=0, vmax=1, origin="lower",
-                            interpolation="nearest")
-        ax.axhline(y=nl*0.25-0.5, color="yellow", lw=1.8, ls="--", alpha=0.95)
-        ax.axhline(y=nl*0.33+0.5, color="yellow", lw=1.8, ls="--", alpha=0.95)
-        ax.set_title(MODEL_LABELS.get(m, m), fontsize=11, fontweight="bold")
-        ax.set_xlabel("Token Position", fontsize=10)
-        if ax == axes[0]: ax.set_ylabel("Layer", fontsize=10)
-        step = max(1, nl//6)
-        ax.set_yticks(range(0, nl, step))
-        ax.set_yticklabels([f"L{i}" for i in range(0, nl, step)], fontsize=8)
-    if last_im:
-        plt.colorbar(last_im, ax=axes[-1], fraction=0.046, pad=0.04,
-                     label="Normalized Patching Effect")
-    fig.suptitle("Figure 3: Activation Patching — Residual Stream\n"
-                 "Yellow dashed = normalized layer pos 0.25–0.33",
-                 fontsize=13, fontweight="bold")
-    plt.tight_layout()
-    plt.savefig("figure3.png", dpi=150, bbox_inches="tight", facecolor="white")
-    print("  figure3.png saved")
-
-# Figure 4: delta_p heatmap (Appendix)
-print("[Figure 4] delta_p heatmap...")
-delta_mat, valid_mods = [], []
-for m in models:
-    row = [all_results[m]["A_summary"].get("delta_p", {}).get(l, 1.0)
-           for l in LANGS]
-    delta_mat.append(row)
-    valid_mods.append(MODEL_LABELS.get(m, m))
-fig, ax = plt.subplots(figsize=(10, max(4, len(valid_mods)*1.4)))
-im = ax.imshow(delta_mat, cmap="RdYlGn_r", vmin=0, vmax=0.1, aspect="auto")
-ax.set_xticks(range(7)); ax.set_xticklabels(LANGS, fontsize=12)
-ax.set_yticks(range(len(valid_mods))); ax.set_yticklabels(valid_mods, fontsize=10)
-for i, row in enumerate(delta_mat):
-    for j, val in enumerate(row):
-        txt = f"{val:.3f}" if val >= 0.001 else "<.001"
-        col = "white" if val < 0.02 or val > 0.08 else "black"
-        ax.text(j, i, txt, ha="center", va="center",
-                fontsize=8, color=col, fontweight="bold")
-plt.colorbar(im, ax=ax, fraction=0.03, pad=0.02,
-             label="delta p-value\n(green=significant, red=not significant)")
-ax.set_title("Figure 4: delta_p by Language and Model\n"
-             "(Supplement — Experiment 1)", fontsize=13, fontweight="bold")
-plt.tight_layout()
-plt.savefig("figure4_delta_p.png", dpi=150, bbox_inches="tight", facecolor="white")
-print("  figure4_delta_p.png saved")
-
-# Figure 5: Zero-Ablation
-print("[Figure 5] Zero-Ablation...")
-zones = ["early_spike", "convergence", "late_spike"]
-ZONE_LABELS = {
-    "early_spike": "Early\nSpike\n(0.10–0.20)",
-    "convergence": "Convergence\n(0.25–0.75)",
-    "late_spike":  "Late\nSpike\n(0.80–0.95)",
-}
-md = [m for m in models if all_results[m].get("D_zero_ablation")]
-if md:
-    fig, axes = plt.subplots(1, len(md), figsize=(4*len(md), 5.5), sharey=True)
-    if len(md) == 1: axes = [axes]
-    for ax, m in zip(axes, md):
-        res   = all_results[m]["D_zero_ablation"]
-        means = [res.get(z, {}).get("mean_drop", 0) for z in zones]
-        stds  = [res.get(z, {}).get("std_drop",  0) for z in zones]
-        ns    = [res.get(z, {}).get("n_pairs",   0) for z in zones]
-        bars  = ax.bar(range(3), means,
-                       color=[ZONE_COLORS[z] for z in zones],
-                       alpha=0.85, width=0.6, yerr=stds, capsize=5,
-                       edgecolor="white")
-        ax.axhline(0, color="black", lw=1, ls="--", alpha=0.6)
-        ax.set_xticks(range(3))
-        ax.set_xticklabels([ZONE_LABELS[z] for z in zones], fontsize=9)
-        ax.set_title(MODEL_LABELS.get(m, m), fontsize=11, fontweight="bold")
-        if ax == axes[0]:
-            ax.set_ylabel("Performance Drop\n(+= harmful)", fontsize=10)
-        ax.grid(axis="y", alpha=0.3, ls="--")
+    # Fig 1
+    n = len(models)
+    fig,axes = plt.subplots(1,n,figsize=(4.5*n,5.5),sharey=False)
+    if n==1: axes=[axes]
+    for ax,m in zip(axes,models):
+        s   = data[m]["A_summary"]["middle_sim_mean"]
+        vs  = [s.get(l,0) for l in LANGS]
+        bars= ax.bar(range(7),vs,color=[LC[l] for l in LANGS],
+                     alpha=.88,width=.7,edgecolor="white")
+        bars[0].set_edgecolor("black"); bars[0].set_linewidth(2)
+        mn,mx = min(v for v in vs if v>0),max(vs)
+        mg = (mx-mn)*.3
+        ax.set_ylim(max(0,mn-mg),min(1,mx+mg*.5))
+        ax.set_xticks(range(7)); ax.set_xticklabels(LANGS,fontsize=9)
+        enr = sorted(vs,reverse=True).index(s.get("en",0))+1
+        ax.set_title(f"{ML.get(m,m)}\n(en #{enr}/7)",fontsize=10,fontweight="bold")
+        ax.set_xlabel("Language",fontsize=9)
+        ax.set_ylabel("Mid-Layer Cosine Sim",fontsize=8)
+        ax.grid(axis="y",alpha=.3,ls="--")
         ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
-        for bar, mean, n_val in zip(bars, means, ns):
-            ax.text(bar.get_x() + bar.get_width()/2,
-                    mean + (0.03 if mean >= 0 else -0.06),
-                    f"{mean:+.2f}\n(n={n_val})",
-                    ha="center", fontsize=8.5, fontweight="bold")
-    fig.suptitle("Figure 5: Zero-Ablation of MLP Zones\n"
-                 "Convergence zone shows largest drop despite lowest MLP magnitude",
-                 fontsize=12, fontweight="bold")
+        ev = s.get("en",0)
+        ax.annotate(f"{ev:.3f}",xy=(0,ev),xytext=(0,4),
+                    textcoords="offset points",ha="center",fontsize=7,fontweight="bold")
+    hs = [plt.Rectangle((0,0),1,1,color=LC[l]) for l in LANGS]
+    fig.legend(hs,LANGS,loc="upper right",bbox_to_anchor=(1,.02),ncol=1,fontsize=9)
+    fig.suptitle("Figure 1: Mid-Layer Cosine Similarity\n(independent y-axes)",
+                 fontsize=12,fontweight="bold",y=1.03)
     plt.tight_layout()
-    plt.savefig("figure5_ablation_improved.png", dpi=150,
-                bbox_inches="tight", facecolor="white")
-    print("  figure5_ablation_improved.png saved")
+    plt.savefig("figure1.png",dpi=150,bbox_inches="tight",facecolor="white")
+    print("figure1.png saved")
 
-# Figure 6: Logit Lens
-print("[Figure 6] Logit Lens...")
-me = [m for m in models if all_results[m].get("E_logit_lens")]
-if me:
-    fig, ax = plt.subplots(figsize=(11, 6))
-    for m in me:
-        ranks = all_results[m]["E_logit_lens"]
-        nl    = len(ranks)
-        x     = [i/(nl-1) for i in range(nl) if ranks[i] is not None]
-        y     = [r for r in ranks if r is not None]
-        ax.plot(x, y, marker="o", markersize=3, linewidth=2,
-                color=MODEL_COLORS.get(m, "#333"),
-                label=MODEL_LABELS.get(m, m), alpha=0.85)
-    ax.axvspan(0.10, 0.20, alpha=0.08, color="red")
-    ax.axvspan(0.25, 0.75, alpha=0.08, color="blue")
-    ax.axvspan(0.80, 0.95, alpha=0.08, color="orange")
-    ax.set_xlabel("Normalized Layer Position", fontsize=12)
-    ax.set_ylabel("Avg Rank of Target Token\n(lower = better)", fontsize=11)
-    ax.set_title("Figure 6: Logit Lens — Progressive Prediction Refinement\n"
-                 "Red=Early spike | Blue=Convergence | Orange=Late spike",
-                 fontsize=12, fontweight="bold")
-    ax.legend(fontsize=9); ax.grid(alpha=0.3, ls="--")
-    ax.invert_yaxis()
-    ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+    # Fig 2
+    fams = {"GPT-2 Family":[m for m in models if "gpt2" in m],
+            "GPT-Neo Family":[m for m in models if "neo" in m],
+            "Pythia Family":[m for m in models if "pythia" in m]}
+    fams = {k:v for k,v in fams.items() if v}
+    if fams:
+        fig,axes = plt.subplots(1,len(fams),figsize=(7*len(fams),5.5))
+        if len(fams)==1: axes=[axes]
+        for ax,(title,grp) in zip(axes,fams.items()):
+            for m in grp:
+                ns = data[m]["C_mlp_norms"]
+                x  = [i/len(ns) for i in range(len(ns))]
+                ax.plot(x,ns,marker="o",markersize=3,linewidth=2,
+                        color=MC.get(m,"#333"),label=ML.get(m,m),alpha=.9)
+            ax.axvspan(.10,.20,alpha=.08,color="red")
+            ax.axvspan(.80,.95,alpha=.08,color="blue")
+            ax.set_xlabel("Normalized Layer Position",fontsize=11)
+            ax.set_ylabel("MLP Transform Magnitude",fontsize=11)
+            ax.set_title(title,fontsize=12,fontweight="bold")
+            ax.legend(fontsize=9); ax.grid(alpha=.3,ls="--")
+            ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+        fig.suptitle("Figure 2: MLP Transform Magnitude",fontsize=13,fontweight="bold")
+        plt.tight_layout()
+        plt.savefig("figure2.png",dpi=150,bbox_inches="tight",facecolor="white")
+        print("figure2.png saved")
+
+    # Fig 3
+    def avg_patch(br):
+        ms=[]
+        for _,mat in br.items():
+            m=np.array(mat); mn,mx=m.min(),m.max()
+            ms.append((m-mn)/(mx-mn) if mx-mn>1e-6 else np.zeros_like(m))
+        if not ms: return None
+        mp=max(m.shape[1] for m in ms); nl=ms[0].shape[0]
+        p=np.zeros((len(ms),nl,mp))
+        for i,m in enumerate(ms): p[i,:,mp-m.shape[1]:]=m
+        return np.mean(p,axis=0)
+    mb=[m for m in models if data[m].get("B_results")]
+    if mb:
+        fig,axes=plt.subplots(1,len(mb),figsize=(4.8*len(mb),5.5))
+        if len(mb)==1: axes=[axes]
+        lim=None
+        for ax,m in zip(axes,mb):
+            mat=avg_patch(data[m]["B_results"])
+            if mat is None: continue
+            nl=mat.shape[0]
+            lim=ax.imshow(mat,aspect="auto",cmap="RdBu_r",vmin=0,vmax=1,
+                          origin="lower",interpolation="nearest")
+            ax.axhline(y=nl*.25-.5,color="yellow",lw=1.8,ls="--",alpha=.95)
+            ax.axhline(y=nl*.33+.5,color="yellow",lw=1.8,ls="--",alpha=.95)
+            ax.set_title(ML.get(m,m),fontsize=11,fontweight="bold")
+            ax.set_xlabel("Token Position",fontsize=10)
+            if ax==axes[0]: ax.set_ylabel("Layer",fontsize=10)
+            st=max(1,nl//6)
+            ax.set_yticks(range(0,nl,st))
+            ax.set_yticklabels([f"L{i}" for i in range(0,nl,st)],fontsize=8)
+        if lim: plt.colorbar(lim,ax=axes[-1],fraction=.046,pad=.04,
+                              label="Normalized Patching Effect")
+        fig.suptitle("Figure 3: Activation Patching\nYellow = norm. pos 0.25–0.33",
+                     fontsize=13,fontweight="bold")
+        plt.tight_layout()
+        plt.savefig("figure3.png",dpi=150,bbox_inches="tight",facecolor="white")
+        print("figure3.png saved")
+
+    # Fig 4
+    dm,vm=[],[]
+    for m in models:
+        dm.append([data[m]["A_summary"].get("delta_p",{}).get(l,1.) for l in LANGS])
+        vm.append(ML.get(m,m))
+    fig,ax=plt.subplots(figsize=(10,max(4,len(vm)*1.4)))
+    im=ax.imshow(dm,cmap="RdYlGn_r",vmin=0,vmax=.1,aspect="auto")
+    ax.set_xticks(range(7)); ax.set_xticklabels(LANGS,fontsize=12)
+    ax.set_yticks(range(len(vm))); ax.set_yticklabels(vm,fontsize=10)
+    for i,row in enumerate(dm):
+        for j,v in enumerate(row):
+            t=f"{v:.3f}" if v>=.001 else "<.001"
+            c="white" if v<.02 or v>.08 else "black"
+            ax.text(j,i,t,ha="center",va="center",fontsize=8,color=c,fontweight="bold")
+    plt.colorbar(im,ax=ax,fraction=.03,pad=.02,
+                 label="delta p-value\n(green=sig, red=not sig)")
+    ax.set_title("Figure 4: delta_p by Language and Model (Appendix)",
+                 fontsize=13,fontweight="bold")
     plt.tight_layout()
-    plt.savefig("figure6_logit_lens.png", dpi=150,
-                bbox_inches="tight", facecolor="white")
-    print("  figure6_logit_lens.png saved")
+    plt.savefig("figure4_delta_p.png",dpi=150,bbox_inches="tight",facecolor="white")
+    print("figure4_delta_p.png saved")
+
+    # Fig 5
+    zones=["early_spike","convergence","late_spike"]
+    ZL={"early_spike":"Early\nSpike\n(0.10–0.20)",
+        "convergence":"Convergence\n(0.25–0.75)",
+        "late_spike": "Late\nSpike\n(0.80–0.95)"}
+    md=[m for m in models if data[m].get("D_zero_ablation")]
+    if md:
+        fig,axes=plt.subplots(1,len(md),figsize=(4*len(md),5.5),sharey=True)
+        if len(md)==1: axes=[axes]
+        for ax,m in zip(axes,md):
+            r=data[m]["D_zero_ablation"]
+            ms=[r.get(z,{}).get("mean_drop",0) for z in zones]
+            ss=[r.get(z,{}).get("std_drop",0)  for z in zones]
+            ns=[r.get(z,{}).get("n_pairs",0)   for z in zones]
+            bars=ax.bar(range(3),ms,color=[ZC[z] for z in zones],
+                        alpha=.85,width=.6,yerr=ss,capsize=5,edgecolor="white")
+            ax.axhline(0,color="black",lw=1,ls="--",alpha=.6)
+            ax.set_xticks(range(3)); ax.set_xticklabels([ZL[z] for z in zones],fontsize=9)
+            ax.set_title(ML.get(m,m),fontsize=11,fontweight="bold")
+            if ax==axes[0]: ax.set_ylabel("Performance Drop\n(+=harmful)",fontsize=10)
+            ax.grid(axis="y",alpha=.3,ls="--")
+            ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+            for bar,mean,nv in zip(bars,ms,ns):
+                ax.text(bar.get_x()+bar.get_width()/2,
+                        mean+(0.03 if mean>=0 else -0.06),
+                        f"{mean:+.2f}\n(n={nv})",ha="center",fontsize=8,fontweight="bold")
+        fig.suptitle("Figure 5: Zero-Ablation of MLP Zones",
+                     fontsize=12,fontweight="bold")
+        plt.tight_layout()
+        plt.savefig("figure5_ablation_improved.png",dpi=150,
+                    bbox_inches="tight",facecolor="white")
+        print("figure5_ablation_improved.png saved")
+
+    # Fig 6
+    me=[m for m in models if data[m].get("E_logit_lens")]
+    if me:
+        fig,ax=plt.subplots(figsize=(11,6))
+        for m in me:
+            ranks=data[m]["E_logit_lens"]
+            nl=len(ranks)
+            x=[i/(nl-1) for i in range(nl) if ranks[i] is not None]
+            y=[r for r in ranks if r is not None]
+            ax.plot(x,y,marker="o",markersize=3,linewidth=2,
+                    color=MC.get(m,"#333"),label=ML.get(m,m),alpha=.85)
+        ax.axvspan(.10,.20,alpha=.08,color="red")
+        ax.axvspan(.25,.75,alpha=.08,color="blue")
+        ax.axvspan(.80,.95,alpha=.08,color="orange")
+        ax.set_xlabel("Normalized Layer Position",fontsize=12)
+        ax.set_ylabel("Avg Rank of Target Token\n(lower = better)",fontsize=11)
+        ax.set_title("Figure 6: Logit Lens — Progressive Prediction Refinement\n"
+                     "Red=Early spike | Blue=Convergence | Orange=Late spike",
+                     fontsize=12,fontweight="bold")
+        ax.legend(fontsize=9); ax.grid(alpha=.3,ls="--"); ax.invert_yaxis()
+        ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+        plt.tight_layout()
+        plt.savefig("figure6_logit_lens.png",dpi=150,
+                    bbox_inches="tight",facecolor="white")
+        print("figure6_logit_lens.png saved")
 
 # Download
 try:
     from google.colab import files
-    for fname in [OUTPUT_JSON,
-                  "figure1.png", "figure2.png", "figure3.png",
-                  "figure4_delta_p.png", "figure5_ablation_improved.png",
-                  "figure6_logit_lens.png"]:
-        if os.path.exists(fname):
-            files.download(fname)
+    for fn in [OUTPUT_JSON,"figure1.png","figure2.png","figure3.png",
+               "figure4_delta_p.png","figure5_ablation_improved.png",
+               "figure6_logit_lens.png"]:
+        if os.path.exists(fn): files.download(fn)
 except ImportError:
     pass
 
-print("\n✅ All experiments and figures complete!")
+print("\n✅ Done!")
